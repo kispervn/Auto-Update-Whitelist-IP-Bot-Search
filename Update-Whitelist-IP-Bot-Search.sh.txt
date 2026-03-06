@@ -1,1 +1,64 @@
+#!/bin/bash
+# How to update new Whitelist IP Bot Search & IP Country database:
+# wget https://filesvpn.cddos.net/cddos/Whitelist-IP-Bot/Update-Whitelist-IP-Bot-Search.sh.txt -O /var/lib/kisper/Update-Whitelist-IP-Bot-Search.sh && echo "12 15 * * 0 root bash /var/lib/kisper/Update-Whitelist-IP-Bot-Search.sh" >> /etc/crontab
+#
+# Google Bot IP: script tu dong tai 4 file JSON tu Google va cap nhat phan # Google Bot IP Addresses trong whitelist.
+# Nguon: https://developers.google.com/crawling/ipranges/
+
+sleep $(( $RANDOM % 200 ));
+ipd=`curl -4 http://cpanel.net/showip.cgi`
+curl -L https://files.voduy.com/vDDoS-Proxy-Protection/conf.d/cdn-ip.conf.txt -o /vddos/conf.d/cdn-ip.conf
+# Tai whitelist goc tu voduy (ghi de file hien tai)
+curl -L https://files.voduy.com/vDDoS-Proxy-Protection/conf.d/whitelist-botsearch.conf.txt -o /vddos/conf.d/whitelist-botsearch.conf
+# curl -L https://files.voduy.com/vDDoS-Proxy-Protection/conf.d/whitelist-botsearch.conf.prefix-16.txt -o /vddos/conf.d/whitelist-botsearch.conf
+
+# Gop them Google Bot IP tu 4 file JSON vao whitelist: chi them IP chua co, da co thi bo qua (tranh trung)
+# Nguon: https://developers.google.com/crawling/ipranges/
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WHITELIST_CONF="/vddos/conf.d/whitelist-botsearch.conf"
+GOOGLE_BASE="https://developers.google.com/crawling/ipranges"
+GOOGLE_JSON="common-crawlers.json special-crawlers.json user-triggered-fetchers.json user-triggered-fetchers-google.json"
+TMPD="${TMPDIR:-/tmp}/whitelist_google_$$"
+mkdir -p "$TMPD"
+cleanup() { rm -rf "$TMPD"; }
+trap cleanup EXIT
+
+# Tai 4 file JSON tu Google
+for f in $GOOGLE_JSON; do
+    curl -LsS -o "$SCRIPT_DIR/$f" "$GOOGLE_BASE/$f" 2>/dev/null || true
+done
+
+# Lay tat ca prefix (ipv4/ipv6) tu 4 file JSON
+for f in $GOOGLE_JSON; do
+    [ -f "$SCRIPT_DIR/$f" ] && grep -oE '"(ipv4|ipv6)Prefix": "[^"]+"' "$SCRIPT_DIR/$f" | sed 's/.*": "//;s/"$//'
+done | sort -u > "$TMPD/json_prefixes"
+
+# Lay prefix da co trong phan # Google Bot IP Addresses (den truoc # Bing Bot)
+awk '/# Google Bot IP Addresses/{f=1;next} /# Bing Bot IP Addresses/{f=0} f && $2=="yes;" {print $1}' "$WHITELIST_CONF" 2>/dev/null | sort -u > "$TMPD/existing"
+
+# Chi lay prefix chua co (da co thi bo qua)
+comm -23 "$TMPD/json_prefixes" "$TMPD/existing" > "$TMPD/new_prefixes"
+
+if [ -s "$TMPD/new_prefixes" ]; then
+    # Tim dong bat dau "# Bing Bot IP Addresses"
+    BING_LINE=$(grep -n "# Bing Bot IP Addresses" "$WHITELIST_CONF" | head -1 | cut -d: -f1)
+    if [ -n "$BING_LINE" ]; then
+        # Tao dong "prefix yes;" cho moi prefix moi
+        while IFS= read -r p; do echo "$p yes;"; done < "$TMPD/new_prefixes" > "$TMPD/new_lines"
+        head -n $((BING_LINE - 1)) "$WHITELIST_CONF" > "$TMPD/head"
+        tail -n +$BING_LINE "$WHITELIST_CONF" > "$TMPD/rest"
+        { cat "$TMPD/head"; cat "$TMPD/new_lines"; echo ""; cat "$TMPD/rest"; } > "$WHITELIST_CONF"
+    fi
+fi
+
+wget https://dl.miyuru.lk/geoip/maxmind/country/maxmind.dat.gz && gunzip maxmind.dat.gz && rm -f /vddos/GeoIP/GeoIP.dat && mv maxmind.dat /vddos/GeoIP/GeoIP.dat
+wget https://dl.miyuru.lk/geoip/maxmind/asn/maxmind.dat.gz && gunzip maxmind.dat.gz && rm -f /vddos/GeoIP/GeoIPASN.dat && mv maxmind.dat /vddos/GeoIP/GeoIPASN.dat
+
+echo "
+# Localhost
+$ipd yes;
+" >> /vddos/conf.d/whitelist-botsearch.conf
+
+vddos restart
+
 
