@@ -1,34 +1,61 @@
 #!/bin/bash
 # How to update new Whitelist IP Bot Search & IP Country database:
 # wget https://filesvpn.cddos.net/cddos/Whitelist-IP-Bot/Update-Whitelist-IP-Bot-Search.sh.txt -O /var/lib/kisper/Update-Whitelist-IP-Bot-Search.sh && echo "12 15 * * 0 root bash /var/lib/kisper/Update-Whitelist-IP-Bot-Search.sh" >> /etc/crontab
-# wget https://raw.githubusercontent.com/kispervn/Auto-Update-Whitelist-IP-Bot-Search/refs/heads/main/Update-Whitelist-IP-Bot-Search.sh.txt -O /var/lib/kisper/Update-Whitelist-IP-Bot-Search.sh && echo "12 15 * * 0 root bash /var/lib/kisper/Update-Whitelist-IP-Bot-Search.sh" >> /etc/crontab
-# Google Bot IP: script tu dong tai 4 file JSON tu Google va cap nhat phan # Google Bot IP Addresses trong whitelist.
+#
+# Google Bot IP: script tu dong tai 5 file JSON tu Google va cap nhat phan # Google Bot IP Addresses trong whitelist.
 # Nguon: https://developers.google.com/crawling/ipranges/
+# 1. common-crawlers.json - Googlebot, etc.
+# 2. special-crawlers.json - AdsBot, etc.
+# 3. user-triggered-fetchers.json - user-triggered fetchers
+# 4. user-triggered-fetchers-google.json - Google-triggered fetchers
+# 5. user-triggered-agents.json - Google agents
 
 sleep $(( $RANDOM % 200 ));
-ipd=`curl -4 http://cpanel.net/showip.cgi`
+# Get server IP (try multiple sources for reliability)
+ipd=""
+for url in "https://api.ipify.org" "http://cpanel.net/showip.cgi"; do
+    ipd=$(curl -4sS -L --max-time 10 "$url" 2>/dev/null)
+    if echo "$ipd" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+        break
+    fi
+done
 curl -L https://files.voduy.com/vDDoS-Proxy-Protection/conf.d/cdn-ip.conf.txt -o /vddos/conf.d/cdn-ip.conf
 # Tai whitelist goc tu voduy (ghi de file hien tai)
 curl -L https://files.voduy.com/vDDoS-Proxy-Protection/conf.d/whitelist-botsearch.conf.txt -o /vddos/conf.d/whitelist-botsearch.conf
 # curl -L https://files.voduy.com/vDDoS-Proxy-Protection/conf.d/whitelist-botsearch.conf.prefix-16.txt -o /vddos/conf.d/whitelist-botsearch.conf
 
-# Gop them Google Bot IP tu 4 file JSON vao whitelist: chi them IP chua co, da co thi bo qua (tranh trung)
+# Gop them Google Bot IP tu 5 file JSON vao whitelist: chi them IP chua co, da co thi bo qua (tranh trung)
 # Nguon: https://developers.google.com/crawling/ipranges/
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WHITELIST_CONF="/vddos/conf.d/whitelist-botsearch.conf"
 GOOGLE_BASE="https://developers.google.com/crawling/ipranges"
-GOOGLE_JSON="common-crawlers.json special-crawlers.json user-triggered-fetchers.json user-triggered-fetchers-google.json"
+GOOGLE_JSON="common-crawlers.json special-crawlers.json user-triggered-fetchers.json user-triggered-fetchers-google.json user-triggered-agents.json"
 TMPD="${TMPDIR:-/tmp}/whitelist_google_$$"
 mkdir -p "$TMPD"
 cleanup() { rm -rf "$TMPD"; }
 trap cleanup EXIT
 
-# Tai 4 file JSON tu Google
+# Tai 4 file JSON tu Google (force refresh - xoa cu, tai moi)
 for f in $GOOGLE_JSON; do
-    curl -LsS -o "$SCRIPT_DIR/$f" "$GOOGLE_BASE/$f" 2>/dev/null || true
+    rm -f "$SCRIPT_DIR/$f"
+    curl -LsS -o "$SCRIPT_DIR/$f" --max-time 30 "$GOOGLE_BASE/$f" 2>/dev/null || true
+    # Kiem tra file co phai JSON hop le (khong phai HTML/redirect)
+    if [ -f "$SCRIPT_DIR/$f" ] && head -c 10 "$SCRIPT_DIR/$f" | grep -q '{'; then
+        echo "[OK] $f"
+    else
+        echo "[FAIL] $f - re-downloading..."
+        rm -f "$SCRIPT_DIR/$f"
+        curl -LsS -o "$SCRIPT_DIR/$f" --max-time 30 -H "Cache-Control: no-cache" "$GOOGLE_BASE/$f?$(date +%s)" 2>/dev/null || true
+    fi
 done
 
-# Lay tat ca prefix (ipv4/ipv6) tu 4 file JSON
+# Lay tat ca prefix (ipv4/ipv6) tu 5 file JSON
+# Cac file JSON:
+# https://developers.google.com/crawling/ipranges/common-crawlers.json
+# https://developers.google.com/crawling/ipranges/special-crawlers.json
+# https://developers.google.com/crawling/ipranges/user-triggered-fetchers.json
+# https://developers.google.com/crawling/ipranges/user-triggered-fetchers-google.json
+# https://developers.google.com/crawling/ipranges/user-triggered-agents.json
 for f in $GOOGLE_JSON; do
     [ -f "$SCRIPT_DIR/$f" ] && grep -oE '"(ipv4|ipv6)Prefix": "[^"]+"' "$SCRIPT_DIR/$f" | sed 's/.*": "//;s/"$//'
 done | sort -u > "$TMPD/json_prefixes"
@@ -40,6 +67,8 @@ awk '/# Google Bot IP Addresses/{f=1;next} /# Bing Bot IP Addresses/{f=0} f && $
 comm -23 "$TMPD/json_prefixes" "$TMPD/existing" > "$TMPD/new_prefixes"
 
 if [ -s "$TMPD/new_prefixes" ]; then
+    NEW_COUNT=$(wc -l < "$TMPD/new_prefixes")
+    echo "[INFO] Found $NEW_COUNT new Google Bot prefixes to add"
     # Tim dong bat dau "# Bing Bot IP Addresses"
     BING_LINE=$(grep -n "# Bing Bot IP Addresses" "$WHITELIST_CONF" | head -1 | cut -d: -f1)
     if [ -n "$BING_LINE" ]; then
@@ -48,17 +77,22 @@ if [ -s "$TMPD/new_prefixes" ]; then
         head -n $((BING_LINE - 1)) "$WHITELIST_CONF" > "$TMPD/head"
         tail -n +$BING_LINE "$WHITELIST_CONF" > "$TMPD/rest"
         { cat "$TMPD/head"; cat "$TMPD/new_lines"; echo ""; cat "$TMPD/rest"; } > "$WHITELIST_CONF"
+        echo "[OK] Added $NEW_COUNT new Google Bot IP prefixes"
     fi
+else
+    echo "[INFO] Google Bot IP whitelist is up to date (no new prefixes)"
 fi
 
 wget https://dl.miyuru.lk/geoip/maxmind/country/maxmind.dat.gz && gunzip maxmind.dat.gz && rm -f /vddos/GeoIP/GeoIP.dat && mv maxmind.dat /vddos/GeoIP/GeoIP.dat
 wget https://dl.miyuru.lk/geoip/maxmind/asn/maxmind.dat.gz && gunzip maxmind.dat.gz && rm -f /vddos/GeoIP/GeoIPASN.dat && mv maxmind.dat /vddos/GeoIP/GeoIPASN.dat
 
-echo "
-# Localhost
-$ipd yes;
-" >> /vddos/conf.d/whitelist-botsearch.conf
+# Add localhost IP only if it's a valid IP (not HTML or error)
+if echo "$ipd" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$|^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$'; then
+    echo "# Localhost
+$ipd yes;" >> /vddos/conf.d/whitelist-botsearch.conf
+fi
 
 vddos restart
+
 
 
