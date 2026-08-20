@@ -21,7 +21,25 @@ for url in "https://api.ipify.org" "http://cpanel.net/showip.cgi"; do
 done
 curl -L https://files.voduy.com/vDDoS-Proxy-Protection/conf.d/cdn-ip.conf.txt -o /vddos/conf.d/cdn-ip.conf
 # Tai whitelist goc tu voduy (ghi de file hien tai)
-curl -L https://files.voduy.com/vDDoS-Proxy-Protection/conf.d/whitelist-botsearch.conf.txt -o /vddos/conf.d/whitelist-botsearch.conf
+# Tai whitelist goc tu voduy (ghi de file hien tai)
+# Kiem tra xem file tra ve co phai HTML (redirect/error) khong
+WHITELIST_DOWNLOADED=0
+for attempt in 1 2 3; do
+    curl -LsS -o /vddos/conf.d/whitelist-botsearch.conf --max-time 30 "$whitelist_url" 2>/dev/null
+    # Kiem tra file hop le: khong phai HTML, bat dau bang "#" hoac so (IP)
+    if [ -f /vddos/conf.d/whitelist-botsearch.conf ]; then
+        first_char=$(head -c 1 /vddos/conf.d/whitelist-botsearch.conf 2>/dev/null)
+        if [ "$first_char" = "#" ] || [[ "$first_char" =~ [0-9] ]]; then
+            WHITELIST_DOWNLOADED=1
+            break
+        fi
+    fi
+    echo "[WARN] Download attempt $attempt failed, retrying..."
+    sleep 2
+done
+if [ "$WHITELIST_DOWNLOADED" -eq 0 ]; then
+    echo "[ERROR] Failed to download valid whitelist file after 3 attempts"
+fi
 # curl -L https://files.voduy.com/vDDoS-Proxy-Protection/conf.d/whitelist-botsearch.conf.prefix-16.txt -o /vddos/conf.d/whitelist-botsearch.conf
 
 # Gop them Google Bot IP tu 5 file JSON vao whitelist: chi them IP chua co, da co thi bo qua (tranh trung)
