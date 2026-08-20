@@ -110,6 +110,11 @@ if echo "$ipd" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$|^([0-9a-fA-F]{1,4}:){7}
 $ipd yes;" >> /vddos/conf.d/whitelist-botsearch.conf
 fi
 
+# Xoa cac file JSON sau khi hoan tat (dung de tai lap khi chay lai)
+for f in common-crawlers.json special-crawlers.json user-triggered-fetchers.json user-triggered-fetchers-google.json user-triggered-agents.json; do
+    rm -f "$SCRIPT_DIR/$f"
+done
+
 vddos restart
 
 
